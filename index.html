@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 日文單字智能查詢系統</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        ::-webkit-scrollbar { height: 8px; width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* 載入動畫 */
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4f46e5;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-8 text-center md:text-left">
+            <div class="inline-block bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-sm font-bold mb-3 shadow-sm">AI 驅動</div>
+            <h1 class="text-3xl md:text-4xl font-bold text-slate-800 mb-2">🤖 智能日文單字解析器</h1>
+            <p class="text-slate-500">輸入任何你**沒看過的全新單字**（可一次輸入多個，用換行或空格隔開），AI 會自動為你查出重音、詞性與動詞分類。</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-8">
+            <div class="flex flex-col gap-4">
+                <label for="searchInput" class="font-semibold text-slate-700">✍️ 輸入想查詢的新單字：</label>
+                <textarea id="searchInput" rows="3" 
+                    class="w-full p-4 text-lg border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors bg-slate-50 focus:bg-white"
+                    placeholder="例如輸入：&#10;諦めます&#10;冷蔵庫&#10;素晴らしい"></textarea>
+                
+                <div class="flex justify-between items-center">
+                    <span id="statusMessage" class="text-sm font-medium text-slate-500">準備就緒</span>
+                    <div class="flex gap-3">
+                        <button id="clearBtn" class="px-5 py-2.5 rounded-lg font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors">
+                            清空
+                        </button>
+                        <button id="searchBtn" class="px-6 py-2.5 rounded-lg font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors shadow-md flex items-center">
+                            <span id="btnText">AI 智能解析</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse min-w-[800px]">
+                    <thead>
+                        <tr class="bg-slate-100 text-slate-700 border-b border-slate-200">
+                            <th class="p-4 font-semibold w-24 text-center">1. 重音</th>
+                            <th class="p-4 font-semibold">2. 漢字/單字</th>
+                            <th class="p-4 font-semibold">3. 平假名 (發音)</th>
+                            <th class="p-4 font-semibold">4. 中文意思</th>
+                            <th class="p-4 font-semibold">5. 詞性/分類</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="divide-y divide-slate-100">
+                        <tr>
+                            <td colspan="5" class="p-12 text-center text-slate-400">
+                                <div class="text-4xl mb-3">✨</div>
+                                <p>尚未查詢任何單字。請在上方輸入新單字並點擊解析！</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 設定 API Key - 已填入
+        const apiKey = "AIzaSyBIJzCCC2-CQ8pSqknyp_CswyZIL5z0h_g";
+        
+        // UI 元素
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const btnText = document.getElementById('btnText');
+        const statusMessage = document.getElementById('statusMessage');
+        const tableBody = document.getElementById('tableBody');
+
+        // 【新增功能】日文語音朗讀函數
+        function speakWord(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ja-JP'; 
+                utterance.rate = 0.85;    
+                window.speechSynthesis.speak(utterance);
+            } else {
+                alert("您的瀏覽器不支援語音合成功能喔！請嘗試使用最新版的 Chrome 或 Safari。");
+            }
+        }
+
+        // 指數退避重試機制的 Fetch 函數
+        async function fetchWithRetry(url, options, maxRetries = 5) {
+            const delays = [1000, 2000, 4000, 8000, 16000];
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP 錯誤! 狀態碼: ${response.status}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    if (i === maxRetries - 1) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delays[i]));
+                }
+            }
+        }
+
+        // 呼叫 Gemini API 進行單字解析
+        async function analyzeWords(wordsText) {
+            const systemInstruction = `
+                你是一個專業、嚴謹的日文老師與辭典工具。
+                用戶會給你一個或多個日文單字（或中文請你翻譯成日文）。
+                請分析這些單字，並嚴格按照提供的 JSON Schema 格式回傳。
+                
+                【極度重要：重音準確性】
+                作為日文老師，你給出的資訊必須多方查證。尤其是高低音（アクセント）的部分，絕對不可以造成學生的誤解。
+                請務必以《NHK日本語發音音調辭典》或標準東京腔為基準，謹慎且正確地標示重音編號。
+                
+                規範：
+                1. accent: 重音編號，請加上括號，例如 '[0]', '[3]', '[1]'。
+                2. word: 日文漢字或原始寫法。
+                3. reading: 對應的平假名讀音。
+                4. meaning: 繁體中文的精準解釋。
+                5. type: 詞性與分類。如果是動詞，務必標示「動詞 (第 1 類)」等；如果是名詞加上する的動詞，標示「名詞 + する (第 3 類)」；形容詞標示「い形容詞」或「な形容詞」。
+            `;
+
+            const generationConfig = {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: "OBJECT",
+                    properties: {
+                        words: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    accent: { type: "STRING" },
+                                    word: { type: "STRING" },
+                                    reading: { type: "STRING" },
+                                    meaning: { type: "STRING" },
+                                    type: { type: "STRING" }
+                                },
+                                required: ["accent", "word", "reading", "meaning", "type"]
+                            }
+                        }
+                    },
+                    required: ["words"]
+                }
+            };
+
+            const payload = {
+                contents: [
+                    { parts: [{ text: `請謹慎查證並分析以下單字：\n${wordsText}` }] }
+                ],
+                systemInstruction: {
+                    parts: [{ text: systemInstruction }]
+                },
+                generationConfig: generationConfig
+            };
+
+            // 已更新為 Gemini 2.0 Flash
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+            const data = await fetchWithRetry(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!jsonText) throw new Error("API 未回傳有效內容");
+            
+            return JSON.parse(jsonText).words;
+        }
+
+        function renderResults(wordsData) {
+            tableBody.innerHTML = ''; 
+            
+            if (!wordsData || wordsData.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-red-500">無法解析單字，請換個方式輸入試試。</td></tr>`;
+                return;
+            }
+
+            wordsData.forEach(item => {
+                const row = document.createElement('tr');
+                row.className = "hover:bg-indigo-50/30 transition-colors";
+                
+                let typeBadgeClass = "bg-slate-100 text-slate-700";
+                if (item.type.includes('動詞')) typeBadgeClass = "bg-blue-100 text-blue-700 border border-blue-200";
+                if (item.type.includes('形容詞')) typeBadgeClass = "bg-amber-100 text-amber-700 border border-amber-200";
+                if (item.type.includes('副詞')) typeBadgeClass = "bg-purple-100 text-purple-700 border border-purple-200";
+                if (item.type === '名詞') typeBadgeClass = "bg-emerald-100 text-emerald-700 border border-emerald-200";
+
+                row.innerHTML = `
+                    <td class="p-4 text-center">
+                        <span class="inline-block bg-slate-700 text-white text-xs font-bold px-2 py-1 rounded shadow-sm">
+                            ${item.accent}
+                        </span>
+                    </td>
+                    <td class="p-4 font-bold text-lg text-slate-800">${item.word}</td>
+                    
+                    <td class="p-4 text-indigo-600 font-medium">
+                        <div class="flex items-center gap-2">
+                            <span>${item.reading}</span>
+                            <button onclick="speakWord('${item.word}')" class="p-1.5 bg-indigo-50 hover:bg-indigo-200 rounded-full text-indigo-500 transition-colors cursor-pointer shadow-sm border border-indigo-100" title="點擊聆聽發音">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                  <path d="M11.536 14.01A8.47 8.47 0 0 0 14.026 8a8.47 8.47 0 0 0-2.49-6.01l-.708.707A7.48 7.48 0 0 1 13.025 8c0 2.071-.84 3.946-2.197 5.303l.708.707z"/>
+                                  <path d="M10.121 12.596A6.48 6.48 0 0 0 12.025 8a6.48 6.48 0 0 0-1.904-4.596l-.707.707A5.48 5.48 0 0 1 11.025 8a5.48 5.48 0 0 1-1.61 3.89l.706.706z"/>
+                                  <path d="M8.707 11.182A4.5 4.5 0 0 0 10.025 8a4.5 4.5 0 0 0-1.318-3.182L8 5.525A3.5 3.5 0 0 1 9.025 8 3.5 3.5 0 0 1 8 10.475l.707.707zM6.717 3.55A.5.5 0 0 1 7 4v8a.5.5 0 0 1-.812.39L3.825 10.5H1.5A.5.5 0 0 1 1 10V6a.5.5 0 0 1 .5-.5h2.325l2.363-1.89a.5.5 0 0 1 .529-.06z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </td>
+                    
+                    <td class="p-4 text-slate-700">${item.meaning}</td>
+                    <td class="p-4">
+                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${typeBadgeClass}">
+                            ${item.type}
+                        </span>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        searchBtn.addEventListener('click', async () => {
+            const query = searchInput.value.trim();
+            if (!query) {
+                alert("請先輸入想要查詢的單字喔！");
+                return;
+            }
+
+            searchBtn.disabled = true;
+            searchBtn.classList.add('opacity-75', 'cursor-not-allowed');
+            btnText.innerHTML = `<span class="loader"></span> 正在呼叫 AI 分析中...`;
+            statusMessage.innerHTML = '<span class="text-indigo-600 font-bold">正在連線查閱辭典...</span>';
+            
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="p-16 text-center text-slate-500">
+                        <span class="loader" style="border-top-color: #6366f1; width: 30px; height: 30px;"></span>
+                        <p class="mt-4 font-medium animate-pulse">正在為您整理單字的平假名、重音與動詞分類，請稍候...</p>
+                    </td>
+                </tr>
+            `;
+
+            try {
+                const parsedWords = await analyzeWords(query);
+                renderResults(parsedWords);
+                statusMessage.innerHTML = `<span class="text-emerald-600 font-bold">✅ 成功解析 ${parsedWords.length} 個單字！</span>`;
+            } catch (error) {
+                console.error(error);
+                statusMessage.innerHTML = '<span class="text-red-500 font-bold">❌ 發生錯誤，請稍後再試。</span>';
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="p-8 text-center text-red-500 font-medium">
+                            系統暫時無法連線，或是輸入的格式太複雜。<br>錯誤訊息: ${error.message}
+                        </td>
+                    </tr>
+                `;
+            } finally {
+                searchBtn.disabled = false;
+                searchBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+                btnText.innerHTML = "AI 智能解析";
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            tableBody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="p-12 text-center text-slate-400">
+                        <div class="text-4xl mb-3">✨</div>
+                        <p>已清空。請輸入新單字並點擊解析！</p>
+                    </td>
+                </tr>
+            `;
+            statusMessage.textContent = "準備就緒";
+            searchInput.focus();
+        });
+    </script>
+</body>
+</html>
